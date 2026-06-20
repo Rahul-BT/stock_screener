@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 import yfinance as yf
+import plotly.graph_objects as go
 
 from stock_screener import ScanConfig, add_indicators, load_watchlist, save_watchlist, scan_market
 
@@ -32,7 +33,7 @@ def main() -> None:
         run_scan = st.button("Run scan", type="primary", use_container_width=True)
 
         st.divider()
-        min_score = st.slider("Minimum score shown", 0, 100, 55)
+        min_score = st.slider("Minimum score shown", 0, 100, 70)
         watchlist = load_watchlist()
         manual_symbol = st.text_input("Add symbol to watchlist", placeholder="AAPL").upper().strip()
         if st.button("Add to watchlist", use_container_width=True) and manual_symbol:
@@ -112,13 +113,43 @@ def main() -> None:
         else:
             watch_df = results[results["symbol"].isin(watchlist)].copy()
             missing = sorted(set(watchlist) - set(watch_df["symbol"]))
-            st.dataframe(watch_df, use_container_width=True, hide_index=True)
+
+            show_watchlist = watch_df[
+                [
+                    "symbol",
+                    "name",
+                    "score",
+                    "price",
+                    "rsi",
+                    "bb_position",
+                    "macd_gap",
+                    "macd_cross_setup",
+                    "bounce_rate",
+                    "bounce_count",
+                    "avg_volume_20d",
+                ]
+            ].copy()
+
+            st.dataframe(
+                show_watchlist,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "score": st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.1f"),
+                    "bb_position": st.column_config.NumberColumn("BB position", format="%.3f"),
+                    "macd_cross_setup": st.column_config.CheckboxColumn("MACD setup"),
+                    "bounce_rate": st.column_config.NumberColumn("Bounce rate", format="%.0%%"),
+                    "avg_volume_20d": st.column_config.NumberColumn("20D avg volume", format="%d"),
+                },
+            )
+
             if missing:
                 st.caption(f"Not in latest scan results: {', '.join(missing)}")
             remove = st.multiselect("Remove symbols", options=watchlist)
             if st.button("Remove selected", disabled=not remove):
                 save_watchlist([symbol for symbol in watchlist if symbol not in remove])
                 st.rerun()
+
 
     with tab_chart:
         default_symbol = filtered.iloc[0]["symbol"] if not filtered.empty else results.iloc[0]["symbol"]
@@ -173,14 +204,83 @@ def render_symbol_chart(symbol: str) -> None:
     stats[3].metric("Lower band", f"${latest['bb_lower']:.2f}")
 
     st.subheader(f"{symbol} price and Bollinger Bands")
-    st.line_chart(chart_data[["Close", "bb_upper", "bb_mid", "bb_lower"]], height=360)
+
+    # Bollinger bands chart.
+    bb_chart = chart_data[["Close", "bb_upper", "bb_mid", "bb_lower"]].copy()
+
+    # Use Plotly so line colors and hover content can be customized precisely.
+    fig = go.Figure()
+    # Upper band (darker green)
+    fig.add_trace(go.Scatter(x=bb_chart.index, y=bb_chart["bb_upper"],
+                             mode="lines", name="BB Upper",
+                             line=dict(color="#2E8B57", width=1),
+                             hovertemplate="BB Upper: $%{y:.2f}<extra></extra>"))
+    # Mid band (darker green, dashed) - include mid value in hover
+    fig.add_trace(go.Scatter(x=bb_chart.index, y=bb_chart["bb_mid"],
+                             mode="lines", name="BB Mid",
+                             line=dict(color="#2E8B57", width=1, dash="dash"),
+                             hovertemplate="BB Mid: $%{y:.2f}<extra></extra>", showlegend=False))
+    # Lower band (darker green)
+    fig.add_trace(go.Scatter(x=bb_chart.index, y=bb_chart["bb_lower"],
+                             mode="lines", name="BB Lower",
+                             line=dict(color="#2E8B57", width=1),
+                             hovertemplate="BB Lower: $%{y:.2f}<extra></extra>"))
+    # Price line (blue)
+    fig.add_trace(go.Scatter(x=bb_chart.index, y=bb_chart["Close"],
+                             mode="lines", name="Price",
+                             line=dict(color="#1f77b4", width=2),
+                             hovertemplate="Price: $%{y:.2f}<extra></extra>"))
+
+    fig.update_layout(hovermode="x unified",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                      height=320,
+                      margin=dict(l=20, r=20, t=40, b=20))
+    fig.update_xaxes(showspikes=True, spikemode="across")
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
+
+
 
     st.subheader("RSI")
-    st.line_chart(chart_data[["rsi"]], height=220)
-    st.caption("RSI below 40 is part of the buy-candidate score.")
+
+    # Plot RSI using Plotly so threshold lines can be styled.
+    fig_rsi = go.Figure()
+    fig_rsi.add_trace(go.Scatter(x=chart_data.index, y=chart_data["rsi"],
+                                 mode="lines", name="RSI",
+                                 line=dict(color="#1f77b4", width=2),
+                                 hovertemplate="RSI: %{y:.1f}<extra></extra>", showlegend=False))
+    # Threshold lines (light red)
+    fig_rsi.add_trace(go.Scatter(x=chart_data.index, y=[70.0] * len(chart_data),
+                                 mode="lines", name="Upper 70",
+                                 line=dict(color="#FF7F7F", width=1, dash="dash"),
+                                 hovertemplate="70<extra></extra>", showlegend=False))
+    fig_rsi.add_trace(go.Scatter(x=chart_data.index, y=[30.0] * len(chart_data),
+                                 mode="lines", name="Lower 30",
+                                 line=dict(color="#FF7F7F", width=1, dash="dash"),
+                                 hovertemplate="30<extra></extra>", showlegend=False))
+
+    fig_rsi.update_layout(height=320, hovermode="x unified", margin=dict(l=20, r=20, t=40, b=20), showlegend=False)
+    st.plotly_chart(fig_rsi, use_container_width=True)
+
+    st.caption("RSI below 40 is part of the buy-candidate score. Thresholds: 30 (oversold) and 70 (overbought).")
+
+
 
     st.subheader("MACD")
-    st.line_chart(chart_data[["macd", "macd_signal", "macd_hist"]], height=260)
+    # Plot MACD and signal with custom colors
+    fig_macd = go.Figure()
+    fig_macd.add_trace(go.Scatter(x=chart_data.index, y=chart_data["macd"],
+                                  mode="lines", name="MACD",
+                                  line=dict(color="#89CFF0", width=2),
+                                  hovertemplate="MACD: %{y:.3f}<extra></extra>"))
+    fig_macd.add_trace(go.Scatter(x=chart_data.index, y=chart_data["macd_signal"],
+                                  mode="lines", name="Signal",
+                                  line=dict(color="#FF7F7F", width=1.5, dash="dash"),
+                                  hovertemplate="Signal: %{y:.3f}<extra></extra>"))
+    fig_macd.update_layout(height=320, hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), margin=dict(l=20, r=20, t=40, b=20))
+    st.plotly_chart(fig_macd, use_container_width=True)
 
 
 if __name__ == "__main__":
