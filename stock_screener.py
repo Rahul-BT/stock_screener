@@ -38,7 +38,19 @@ class ScanConfig:
     include_etfs: bool = False
     max_symbols: int | None = 500
     universe: str = "largest_market_cap"
-    add_fundamentals: bool = False
+    add_fundamentals: bool = True
+
+    # Scoring weight multipliers (adjust from UI)
+    weight_rsi: float = 1.0
+    weight_bb: float = 1.0
+    weight_macd: float = 1.0
+    weight_bounce: float = 1.0
+
+    # Cap for technical score before fundamentals are applied
+    cap_pre_fundamentals: float = 85.0
+
+    # Multiplier applied to the fundamentals growth bonus
+    fundamentals_weight: float = 1.0
 
 
 def load_largest_market_cap_symbols(limit: int = 200) -> pd.DataFrame:
@@ -157,7 +169,7 @@ def scan_market(config: ScanConfig) -> pd.DataFrame:
 
     if config.add_fundamentals and not results.empty:
         results = add_fundamental_growth(results)
-        results["score"] = results.apply(_recompute_score_with_fundamentals, axis=1)
+        results["score"] = results.apply(lambda row: _recompute_score_with_fundamentals(row, config), axis=1)
 
     return results.sort_values(["score", "macd_cross_setup", "rsi"], ascending=[False, False, True]).reset_index(drop=True)
 
@@ -172,7 +184,7 @@ def _score_downloaded_prices(
     for symbol in symbols:
         try:
             history = _extract_symbol_frame(prices, symbol, len(symbols))
-            scored = score_symbol(history)
+            scored = score_symbol(history, config)
         except Exception:
             continue
 
@@ -200,7 +212,7 @@ def _extract_symbol_frame(prices: pd.DataFrame, symbol: str, symbol_count: int) 
     return frame.dropna(subset=["Close"])
 
 
-def score_symbol(history: pd.DataFrame) -> dict | None:
+def score_symbol(history: pd.DataFrame, config: ScanConfig) -> dict | None:
     if history.empty or len(history) < 120:
         return None
 
@@ -222,12 +234,19 @@ def score_symbol(history: pd.DataFrame) -> dict | None:
     macd_gap_pct = abs(macd_gap) / max(float(latest["Close"]), 0.01)
     bounce_rate, bounce_count = lower_band_bounce_rate(df)
 
+    # Base component scores (same ranges as before)
     rsi_score = np.interp(float(latest["rsi"]), [20, 40, 55], [30, 25, 0])
     bb_score = np.interp(bb_position, [-0.05, 0.25, 0.60, 1.0], [25, 25, 10, 0])
     macd_score = 25 if macd_cross_setup and macd_gap_pct < 0.015 else np.interp(macd_gap, [-2.0, 0.0, 2.0], [5, 15, 18])
     bounce_score = min(15, bounce_rate * 15)
 
-    score = float(np.clip(rsi_score + bb_score + macd_score + bounce_score, 0, 85))
+    # Apply user-configurable multipliers
+    rsi_score *= config.weight_rsi
+    bb_score *= config.weight_bb
+    macd_score *= config.weight_macd
+    bounce_score *= config.weight_bounce
+
+    score = float(np.clip(rsi_score + bb_score + macd_score + bounce_score, 0, config.cap_pre_fundamentals))
 
     return {
         "score": round(score, 1),
@@ -334,13 +353,15 @@ def _growth(current: float, previous: float) -> float:
     return float((current - previous) / abs(previous))
 
 
-def _recompute_score_with_fundamentals(row: pd.Series) -> float:
-    base = min(float(row["score"]), 85.0)
+def _recompute_score_with_fundamentals(row: pd.Series, config: ScanConfig) -> float:
+    base = min(float(row["score"]), config.cap_pre_fundamentals)
     growth_bonus = 0.0
     for field in ("revenue_growth", "earnings_growth"):
         value = row.get(field)
         if pd.notna(value):
             growth_bonus += float(np.interp(value, [-0.10, 0.0, 0.20, 0.50], [-5, 0, 5, 7.5]))
+    # Apply fundamentals multiplier
+    growth_bonus *= config.fundamentals_weight
     return round(float(np.clip(base + growth_bonus, 0, 100)), 1)
 
 

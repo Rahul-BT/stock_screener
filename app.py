@@ -29,10 +29,19 @@ def main() -> None:
         min_price = st.number_input("Minimum stock price", min_value=0.0, value=5.0, step=1.0)
         min_avg_volume = st.number_input("Minimum 20-day avg volume", min_value=0, value=300_000, step=50_000)
         include_etfs = st.toggle("Include ETFs", value=False, disabled=universe_label == "Top market cap")
-        add_fundamentals = st.toggle("Add fundamentals scoring", value=False, help="Slower. Uses available Yahoo Finance financial statements.")
+        add_fundamentals = st.toggle("Add fundamentals scoring", value=True, help="Slower. Uses available Yahoo Finance financial statements.")
         run_scan = st.button("Run scan", type="primary", use_container_width=True)
 
         st.divider()
+        with st.expander("Scoring weights (advanced)", expanded=False):
+            st.caption("Adjust contribution multipliers for technical components")
+            weight_rsi = st.slider("RSI weight", 0.0, 2.0, 1.0, step=0.05)
+            weight_bb = st.slider("Bollinger weight", 0.0, 2.0, 1.0, step=0.05)
+            weight_macd = st.slider("MACD weight", 0.0, 2.0, 1.0, step=0.05)
+            weight_bounce = st.slider("Bounce history weight", 0.0, 2.0, 1.0, step=0.05)
+            cap_pre_fundamentals = st.slider("Technical cap (pre-fundamentals)", 0, 100, 85)
+            fundamentals_weight = st.slider("Fundamentals weight", 0.0, 2.0, 1.0, step=0.05)
+
         min_score = st.slider("Minimum score shown", 0, 100, 70)
         watchlist = load_watchlist()
         manual_symbol = st.text_input("Add symbol to watchlist", placeholder="AAPL").upper().strip()
@@ -47,6 +56,12 @@ def main() -> None:
         include_etfs=include_etfs and universe_label == "All US listings",
         universe="largest_market_cap" if universe_label == "Top market cap" else "all_us",
         add_fundamentals=add_fundamentals,
+        weight_rsi=float(locals().get('weight_rsi', 1.0)),
+        weight_bb=float(locals().get('weight_bb', 1.0)),
+        weight_macd=float(locals().get('weight_macd', 1.0)),
+        weight_bounce=float(locals().get('weight_bounce', 1.0)),
+        cap_pre_fundamentals=int(locals().get('cap_pre_fundamentals', 85)),
+        fundamentals_weight=float(locals().get('fundamentals_weight', 1.0)),
     )
 
     if run_scan or "scan_results" not in st.session_state:
